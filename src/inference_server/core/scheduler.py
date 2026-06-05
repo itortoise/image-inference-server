@@ -69,7 +69,6 @@ class DynamicBatcher:
                 images = [req.inputs.get("image") for req in batch]
                 tensors = preprocessor.process_batch(images)
             except Exception as e:
-                # 预处理异常：整个 batch 失败
                 for req in batch:
                     req.set_exception(e)
                 continue
@@ -82,9 +81,13 @@ class DynamicBatcher:
                     req.set_exception(e)
                 continue
 
-            # 获取模型输入名
+            # 获取模型输入名（从 backend 的输入规格中获取第一个）
             input_specs = backend.get_input_specs()
             input_name = input_specs[0]["name"] if input_specs else "input"
+
+            # 获取模型输出名
+            output_specs = backend.get_output_specs()
+            output_name = output_specs[0]["name"] if output_specs else "output"
 
             # Backend 推理
             infer_start = time.monotonic()
@@ -97,14 +100,11 @@ class DynamicBatcher:
             infer_latency = time.monotonic() - infer_start
 
             # 拆分结果并分发
-            batch_size = len(batch)
-            output_name = list(outputs.keys())[0]
             output_tensor = outputs[output_name]
 
             for i, req in enumerate(batch):
                 try:
-                    # 取出第 i 个样本的输出
-                    single_output = output_tensor[i:i + 1]  # 保持 batch 维度
+                    single_output = output_tensor[i:i + 1]
                     result = postprocessor.process(single_output)
                     req.set_result(result)
                 except Exception as e:
@@ -117,7 +117,6 @@ class DynamicBatcher:
 
         while len(batch) < self.max_batch_size:
             if deadline is None:
-                # 等待第一个请求（阻塞）
                 try:
                     req = await self.queue.get()
                 except asyncio.CancelledError:
@@ -127,7 +126,6 @@ class DynamicBatcher:
                 batch.append(req)
                 deadline = time.monotonic() + self.max_wait_ms
             else:
-                # 非阻塞尝试获取后续请求
                 timeout = deadline - time.monotonic()
                 if timeout <= 0:
                     break
