@@ -1,0 +1,24 @@
+name: "mnist"
+backend: "onnxruntime"
+
+max_batch_size: 32
+
+input:
+  - name: "images"
+    data_type: "FP32"
+    dims: [1, 28, 28]
+
+output:
+  - name: "output"
+    data_type: "FP32"
+    dims: [10]
+
+preprocess:
+  resize: [28, 28]
+  mean: [0.5]
+  std: [0.5]
+  pixel_format: "GRAY"
+
+backend_config:
+  providers:
+    - name: "CPUExecutionProvider"
