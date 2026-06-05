@@ -4,6 +4,8 @@ import asyncio
 import time
 from typing import Any, List
 
+import numpy as np
+
 from inference_server.backend.base import Backend
 from inference_server.config import SchedulerConfig
 from inference_server.core.request import InferenceRequest
@@ -58,13 +60,17 @@ class DynamicBatcher:
         return future
 
     async def run(self, backend: Backend, preprocessor, postprocessor) -> None:
-        """主循环：持续凑 batch → 推理 → 分发。"""
+        """主循环：持续凑 batch → 推理 → 分发。
+
+        关键设计：Scheduler 只负责凑 batch 和预处理，不碰张量合并/拆分。
+        Backend 自己决定如何处理 batch（支持动态 batch 则合并推理，不支持则逐个推理）。
+        """
         while not self._shutdown:
             batch = await self._collect_batch()
             if not batch:
                 continue
 
-            # 并行预处理
+            # 并行预处理 → list[tensor]
             try:
                 images = [req.inputs.get("image") for req in batch]
                 tensors = preprocessor.process_batch(images)
@@ -73,39 +79,26 @@ class DynamicBatcher:
                     req.set_exception(e)
                 continue
 
-            # 合并成 batch 张量
-            try:
-                merged_input = preprocessor.merge_batch(tensors)
-            except Exception as e:
-                for req in batch:
-                    req.set_exception(e)
-                continue
-
-            # 获取模型输入名（从 backend 的输入规格中获取第一个）
+            # 构造 inputs_list: [{input_name: tensor}, ...]
             input_specs = backend.get_input_specs()
             input_name = input_specs[0]["name"] if input_specs else "input"
+            inputs_list = [{input_name: t[np.newaxis, ...] if t.ndim == len(input_specs[0]["shape"]) - 1 else t} for t in tensors]
 
-            # 获取模型输出名
-            output_specs = backend.get_output_specs()
-            output_name = output_specs[0]["name"] if output_specs else "output"
-
-            # Backend 推理
+            # Backend 推理（Backend 自己决定合并还是逐张）
             infer_start = time.monotonic()
             try:
-                outputs = backend.infer({input_name: merged_input})
+                results = backend.infer_batch(inputs_list)
             except Exception as e:
                 for req in batch:
                     req.set_exception(e)
                 continue
             infer_latency = time.monotonic() - infer_start
 
-            # 拆分结果并分发
-            output_tensor = outputs[output_name]
-
-            for i, req in enumerate(batch):
+            # 逐个后处理并分发结果
+            for req, result_dict in zip(batch, results):
                 try:
-                    single_output = output_tensor[i:i + 1]
-                    result = postprocessor.process(single_output)
+                    output_name = list(result_dict.keys())[0]
+                    result = postprocessor.process(result_dict[output_name])
                     req.set_result(result)
                 except Exception as e:
                     req.set_exception(e)

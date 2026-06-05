@@ -14,15 +14,20 @@ class TestDynamicBatcher:
     @pytest.fixture
     def mock_backend(self):
         backend = Mock()
-        backend.infer = Mock(return_value={"output": np.ones((2, 10))})
-        backend.get_input_specs = Mock(return_value=[{"name": "images"}])
+        # infer_batch 返回 list[dict]，每个 dict 包含单张输出
+        backend.infer_batch = Mock(return_value=[
+            {"output": np.ones((1, 10))},
+            {"output": np.ones((1, 10))},
+            {"output": np.ones((1, 10))},
+            {"output": np.ones((1, 10))},
+        ])
+        backend.get_input_specs = Mock(return_value=[{"name": "images", "shape": [None, 3, 224, 224]}])
         return backend
 
     @pytest.fixture
     def mock_preprocessor(self):
         preprocessor = Mock()
         preprocessor.process_batch = Mock(return_value=[np.ones((3, 224, 224)), np.ones((3, 224, 224))])
-        preprocessor.merge_batch = Mock(return_value=np.ones((2, 3, 224, 224)))
         return preprocessor
 
     @pytest.fixture
@@ -83,10 +88,10 @@ class TestDynamicBatcher:
         assert result1 == {"class": "cat", "score": 0.99}
         assert result2 == {"class": "cat", "score": 0.99}
 
-        # 验证 backend.infer 被调用，且 batch_size=2
-        mock_backend.infer.assert_called_once()
-        call_args = mock_backend.infer.call_args[0][0]
-        assert call_args["images"].shape[0] == 2  # batch size = 2
+        # 验证 backend.infer_batch 被调用，且传了 2 个输入
+        mock_backend.infer_batch.assert_called_once()
+        call_args = mock_backend.infer_batch.call_args[0][0]
+        assert len(call_args) == 2  # batch size = 2
 
         scheduler.shutdown()
         task.cancel()

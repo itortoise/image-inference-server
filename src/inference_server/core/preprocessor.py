@@ -75,7 +75,3 @@ class ImagePreprocessor:
     def process_batch(self, images: List[np.ndarray]) -> List[np.ndarray]:
         """批量预处理。"""
         return [self.process(img) for img in images]
-
-    def merge_batch(self, tensors: List[np.ndarray]) -> np.ndarray:
-        """将预处理后的单张图像张量合并成 batch 张量 [B, C, H, W]。"""
-        return np.stack(tensors, axis=0)

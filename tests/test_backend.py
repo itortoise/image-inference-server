@@ -19,7 +19,7 @@ class TestBackendRegistry:
             def initialize(self, model_path, config):
                 pass
 
-            def infer(self, inputs):
+            def infer_single(self, inputs):
                 return inputs
 
             def get_input_specs(self):
@@ -82,8 +82,8 @@ class TestONNXRuntimeBackend:
         os.close(fd)
         return path
 
-    def test_onnx_backend_initialize_and_infer(self):
-        """测试 ONNX Backend 初始化和推理"""
+    def test_onnx_backend_infer_single(self):
+        """测试 ONNX Backend 单张推理"""
         from inference_server.backend.onnx_backend import ONNXRuntimeBackend
 
         model_path = self._create_test_onnx_model()
@@ -94,18 +94,37 @@ class TestONNXRuntimeBackend:
         input_specs = backend.get_input_specs()
         assert len(input_specs) == 1
         assert input_specs[0]["name"] == "x"
+        assert backend._supports_dynamic_batch is True  # 动态 batch
 
-        output_specs = backend.get_output_specs()
-        assert len(output_specs) == 1
-        assert output_specs[0]["name"] == "y"
-
-        # 推理
-        x = np.ones((2, 3, 224, 224), dtype=np.float32)
-        outputs = backend.infer({"x": x})
+        # 单张推理
+        x = np.ones((1, 3, 224, 224), dtype=np.float32)
+        outputs = backend.infer_single({"x": x})
 
         assert "y" in outputs
         expected = x * 2 + 1
         np.testing.assert_allclose(outputs["y"], expected, rtol=1e-5)
+
+        backend.destroy()
+        os.unlink(model_path)
+
+    def test_onnx_backend_infer_batch_dynamic(self):
+        """测试 ONNX Backend 批量推理（支持动态 batch）"""
+        from inference_server.backend.onnx_backend import ONNXRuntimeBackend
+
+        model_path = self._create_test_onnx_model()
+        backend = ONNXRuntimeBackend()
+        backend.initialize(model_path, {"providers": ["CPUExecutionProvider"]})
+
+        # 批量推理：应该合并为 [B, ...] 一次推理
+        inputs_list = [
+            {"x": np.ones((1, 3, 224, 224), dtype=np.float32)},
+            {"x": np.ones((1, 3, 224, 224), dtype=np.float32) * 2},
+        ]
+        results = backend.infer_batch(inputs_list)
+
+        assert len(results) == 2
+        np.testing.assert_allclose(results[0]["y"], np.ones((1, 3, 224, 224)) * 3, rtol=1e-5)
+        np.testing.assert_allclose(results[1]["y"], np.ones((1, 3, 224, 224)) * 5, rtol=1e-5)
 
         backend.destroy()
         os.unlink(model_path)
