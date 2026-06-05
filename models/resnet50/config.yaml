@@ -1,0 +1,24 @@
+name: "resnet50"
+backend: "onnxruntime"
+
+max_batch_size: 32
+
+input:
+  - name: "images"
+    data_type: "FP32"
+    dims: [3, 224, 224]
+
+output:
+  - name: "output"
+    data_type: "FP32"
+    dims: [10]
+
+preprocess:
+  resize: [224, 224]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  pixel_format: "RGB"
+
+backend_config:
+  providers:
+    - name: "CPUExecutionProvider"

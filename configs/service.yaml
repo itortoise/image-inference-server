@@ -1,0 +1,18 @@
+server:
+  http_port: 8000
+  grpc_port: 8001
+  max_concurrent_requests: 100
+
+scheduler:
+  max_batch_size: 32
+  max_wait_ms: 5
+  queue_capacity: 1000
+
+metrics:
+  enabled: true
+  port: 8080
+
+models:
+  model_dir: "./models"
+  preload:
+    - "resnet50"

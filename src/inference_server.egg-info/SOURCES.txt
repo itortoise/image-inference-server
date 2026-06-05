@@ -1,0 +1,14 @@
+pyproject.toml
+src/inference_server/__init__.py
+src/inference_server.egg-info/PKG-INFO
+src/inference_server.egg-info/SOURCES.txt
+src/inference_server.egg-info/dependency_links.txt
+src/inference_server.egg-info/entry_points.txt
+src/inference_server.egg-info/requires.txt
+src/inference_server.egg-info/top_level.txt
+src/inference_server/api/__init__.py
+src/inference_server/backend/__init__.py
+src/inference_server/backend/base.py
+src/inference_server/backend/registry.py
+src/inference_server/core/__init__.py
+tests/test_backend.py
