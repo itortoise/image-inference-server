@@ -1,0 +1,27 @@
+name: "resnet34"
+backend: "onnxruntime"
+
+max_batch_size: 16
+
+input:
+  - name: "input"
+    data_type: "FP32"
+    dims: [3, 224, 224]
+
+output:
+  - name: "output"
+    data_type: "FP32"
+    dims: [1000]
+
+preprocess:
+  resize: [224, 224]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  pixel_format: "RGB"
+
+backend_config:
+  providers:
+    - name: "CUDAExecutionProvider"
+      options:
+        device_id: 0
+    - name: "CPUExecutionProvider"
