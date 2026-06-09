@@ -14,9 +14,8 @@ class ONNXRuntimeBackend(Backend):
     """ONNX Runtime 推理后端。
 
     通过 providers 配置支持不同硬件：
-    - CANNExecutionProvider: 昇腾 NPU
-    - CUDAExecutionProvider: NVIDIA GPU
-    - CPUExecutionProvider: CPU (兜底)
+    - CPUExecutionProvider: CPU (默认)
+    - CUDAExecutionProvider: NVIDIA GPU (需 onnxruntime-gpu)
 
     Batch 策略：
     - 自动检测模型是否支持动态 batch
