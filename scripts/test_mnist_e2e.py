@@ -224,7 +224,12 @@ async def test_http_endpoint():
                 latencies.append(latency)
                 if resp.status_code == 200:
                     data = resp.json()
-                    pred = data["outputs"][0]["data"][0][0]
+                    labels = data["result"]["data"]["message"]["data"]
+                    pred_label = labels[0]  # top1 label (str)
+                    try:
+                        pred = int(pred_label)
+                    except ValueError:
+                        pred = pred_label
                     ok = pred == true_label
                     if ok:
                         correct += 1

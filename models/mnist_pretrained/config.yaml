@@ -19,6 +19,8 @@ preprocess:
   std: [0.5]
   pixel_format: "GRAY"
 
+label_map: "char2idx.txt"
+
 backend_config:
   providers:
     - name: "CPUExecutionProvider"

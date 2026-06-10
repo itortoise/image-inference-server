@@ -18,12 +18,58 @@ class ModelInfo:
     """模型运行时信息。"""
 
     def __init__(self, config: ModelConfig, backend: Backend,
-                 preprocessor: ImagePreprocessor, postprocessor):
+                 preprocessor: ImagePreprocessor, postprocessor, label_map: dict = None):
         self.config = config
         self.backend = backend
         self.preprocessor = preprocessor
         self.postprocessor = postprocessor
+        self.label_map = label_map or {}  # id -> key 映射
         self.state = "READY"
+
+
+def _load_label_map(model_dir: Path, label_map_path: str) -> dict:
+    """加载 char2idx.txt 文件，构建 id -> key 映射。
+
+    文件格式（每行：key \t id）：
+        cat    973
+        dog    599
+        bird   539
+
+    Returns:
+        {id: key} 字典
+    """
+    if not label_map_path:
+        return {}
+
+    # 支持相对路径（相对于模型目录）和绝对路径
+    map_file = Path(label_map_path)
+    if not map_file.is_absolute():
+        map_file = model_dir / label_map_path
+
+    if not map_file.exists():
+        print(f"Label map file not found: {map_file}")
+        return {}
+
+    label_map = {}
+    try:
+        with open(map_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    key = parts[0]
+                    try:
+                        idx = int(parts[1])
+                        label_map[idx] = key
+                    except ValueError:
+                        continue
+        print(f"Loaded label map: {len(label_map)} entries from {map_file}")
+    except Exception as e:
+        print(f"Failed to load label map: {e}")
+
+    return label_map
 
 
 class ModelManager:
@@ -80,9 +126,12 @@ class ModelManager:
             backend = backend_cls()
             backend.initialize(str(model_file), model_config.backend_config)
 
+            # 加载 label 映射文件
+            label_map = _load_label_map(model_path, model_config.label_map)
+
             # 创建预处理器和后处理器
             preprocessor = ImagePreprocessor(model_config.preprocess)
-            postprocessor = ClassificationPostprocessor(top_k=5)
+            postprocessor = ClassificationPostprocessor(top_k=5, label_map=label_map)
 
             # 存储模型信息
             self._models[model_name] = ModelInfo(
@@ -90,6 +139,7 @@ class ModelManager:
                 backend=backend,
                 preprocessor=preprocessor,
                 postprocessor=postprocessor,
+                label_map=label_map,
             )
 
             print(f"Model '{model_name}' loaded successfully")

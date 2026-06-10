@@ -47,6 +47,7 @@ class ModelConfig(BaseModel):
     output: list[TensorConfig]
     preprocess: PreprocessConfig
     backend_config: dict = Field(default_factory=dict)
+    label_map: str = Field(default="", description="Path to char2idx.txt (id -> key mapping file)")
 
 
 class MetricsConfig(BaseModel):

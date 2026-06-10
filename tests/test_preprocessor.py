@@ -96,10 +96,14 @@ class TestClassificationPostprocessor:
 
         assert "classes" in result
         assert "scores" in result
+        assert "labels" in result
         assert len(result["classes"]) == 3
         assert len(result["scores"]) == 3
+        assert len(result["labels"]) == 3
 
         # 最高分应该是索引 3
         assert result["classes"][0] == 3
         assert result["scores"][0] > result["scores"][1]
         assert all(0 <= s <= 1 for s in result["scores"])  # 每个分数在 [0,1] 之间
+        # 无 label_map 时 labels 为 str(id)
+        assert result["labels"][0] == "3"

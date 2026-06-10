@@ -1,4 +1,4 @@
-"""FastAPI HTTP 服务。"""
+"""FastAPI HTTP 服务 — 统一 JSON 响应格式。"""
 
 import asyncio
 import base64
@@ -10,15 +10,35 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from inference_server.api.schemas import (
-    ErrorResponse,
     InferRequest,
-    InferResponse,
     ModelInfo,
     ModelListResponse,
+    UnifiedResponse,
 )
-from inference_server.config import ModelConfig
 from inference_server.core.request import InferenceRequest
 from inference_server.core.scheduler import DynamicBatcher
+
+
+def _ok_response(data: Any, code: str = "200", msg: str = "success") -> dict:
+    """构造成功响应体。"""
+    return {
+        "status": True,
+        "result": {
+            "code": code,
+            "data": {"message": {"code": "1", "data": data}},
+            "message": msg,
+        },
+        "message": "",
+    }
+
+
+def _err_response(code: str, message: str) -> dict:
+    """构造错误响应体。"""
+    return {
+        "status": False,
+        "result": {"code": code, "data": None, "message": message},
+        "message": "",
+    }
 
 
 def create_http_app(
@@ -31,14 +51,14 @@ def create_http_app(
     @app.get("/v2/health/ready")
     async def health_ready():
         """服务就绪检查。"""
-        return {"status": "ready"}
+        return _ok_response("ready", msg="Service is ready")
 
     @app.get("/v2/health/live")
     async def health_live():
         """服务存活检查。"""
-        return {"status": "live"}
+        return _ok_response("live", msg="Service is alive")
 
-    @app.get("/v2/models", response_model=ModelListResponse)
+    @app.get("/v2/models")
     async def list_models():
         """列出所有模型。"""
         models = []
@@ -48,24 +68,23 @@ def create_http_app(
                 version="1",
                 state=info["state"],
             ))
-        return ModelListResponse(models=models)
+        return _ok_response(models, msg="Models listed")
 
-    @app.post("/v2/models/{model_name}/infer", response_model=InferResponse)
+    @app.post("/v2/models/{model_name}/infer")
     async def model_infer(model_name: str, request: InferRequest):
         """模型推理。"""
         # 获取模型配置
         model_config = model_manager.get_model_config(model_name)
         if model_config is None:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Model '{model_name}' not found",
+                content=_err_response("404", f"Model '{model_name}' not found"),
             )
 
         # 解码图像
         try:
             input_data = request.inputs[0].data[0]
             if isinstance(input_data, str):
-                # base64 编码的图像
                 image_bytes = base64.b64decode(input_data)
             else:
                 image_bytes = bytes(input_data)
@@ -76,9 +95,9 @@ def create_http_app(
                 raise ValueError("Failed to decode image")
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         except Exception as e:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid image data: {str(e)}",
+                content=_err_response("400", f"Invalid image data: {str(e)}"),
             )
 
         # 创建推理请求
@@ -92,40 +111,26 @@ def create_http_app(
             future = await scheduler.submit(req)
             result = await asyncio.wait_for(future, timeout=30.0)
         except asyncio.TimeoutError:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Inference timeout",
+                content=_err_response("504", "Inference timeout"),
             )
         except Exception as e:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e),
+                content=_err_response("500", str(e)),
             )
 
-        # 构造响应
-        return InferResponse(
-            model_name=model_name,
-            outputs=[
-                {
-                    "name": "output",
-                    "shape": [1, len(result.get("classes", []))],
-                    "datatype": "FP32",
-                    "data": [result.get("classes", []), result.get("scores", [])],
-                }
-            ],
-        )
+        # 构造响应 — 取 labels 作为 data（已通过 postprocessor 完成 id->key 映射）
+        labels = result.get("labels", [])
+        return _ok_response(labels, msg="Inference success")
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request, exc):
-        """全局异常处理。"""
+        """全局异常处理 — 统一 JSON 格式。"""
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": str(exc),
-                }
-            },
+            content=_err_response("500", str(exc)),
         )
 
     return app

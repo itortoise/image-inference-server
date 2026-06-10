@@ -18,13 +18,30 @@ import argparse
 import asyncio
 import base64
 import io
+import json
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List
 
 import cv2
 import numpy as np
 from httpx import AsyncClient
+
+
+@dataclass
+class RequestResult:
+    """单次请求结果。"""
+    request_id: int
+    latency: float  # 秒，-1 表示失败
+    status_code: int = 0
+    classes: list = field(default_factory=list)
+    scores: list = field(default_factory=list)
+    error: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.latency >= 0 and self.status_code == 200
 
 
 @dataclass
@@ -36,6 +53,7 @@ class BenchmarkResult:
     successful: int = 0
     failed: int = 0
     latencies: List[float] = field(default_factory=list)
+    request_results: List[RequestResult] = field(default_factory=list)
 
     @property
     def throughput(self) -> float:
@@ -59,7 +77,7 @@ class BenchmarkResult:
             return 0
         return np.mean(self.latencies)
 
-    def report(self):
+    def report(self, sample_size: int = 10):
         print("=" * 60)
         print("📊 压测结果")
         print("=" * 60)
@@ -73,6 +91,41 @@ class BenchmarkResult:
         print(f"  P50 延迟:     {self.p50_latency*1000:.2f}ms")
         print(f"  P99 延迟:     {self.p99_latency*1000:.2f}ms")
         print("=" * 60)
+
+        # 打印推理结果样本
+        success_results = [r for r in self.request_results if r.success]
+        if success_results:
+            show_n = min(sample_size, len(success_results))
+            print(f"\n🔍 推理结果样本（前 {show_n} 条成功请求）:")
+            print("-" * 60)
+            for r in success_results[:show_n]:
+                top_class = r.classes[0] if r.classes else "N/A"
+                top_score = r.scores[0] if r.scores else "N/A"
+                score_str = f"{top_score:.4f}" if isinstance(top_score, float) else str(top_score)
+                print(f"  req#{r.request_id:04d}  "
+                      f"latency={r.latency*1000:6.2f}ms  "
+                      f"top_class={top_class}  "
+                      f"top_score={score_str}  "
+                      f"classes={r.classes[:5]}")
+            print("-" * 60)
+
+        # 统计推理结果分布
+        if success_results:
+            all_top_classes = [
+                r.classes[0] for r in success_results if r.classes
+            ]
+            if all_top_classes:
+                unique, counts = np.unique(all_top_classes, return_counts=True)
+                print(f"\n📈 Top-1 预测类别分布（共 {len(all_top_classes)} 条）:")
+                for cls, cnt in sorted(zip(unique, counts), key=lambda x: -x[1])[:10]:
+                    print(f"    class {cls}: {cnt} 次 ({cnt/len(all_top_classes)*100:.1f}%)")
+
+        # 打印失败请求详情
+        failed_results = [r for r in self.request_results if not r.success]
+        if failed_results:
+            print(f"\n❌ 失败请求详情（共 {len(failed_results)} 条）:")
+            for r in failed_results[:5]:
+                print(f"    req#{r.request_id:04d}: {r.error}")
 
 
 def generate_mnist_image() -> str:
@@ -89,8 +142,9 @@ def generate_mnist_image() -> str:
     return base64.b64encode(buffer).decode("utf-8")
 
 
-async def send_request(client: AsyncClient, model_name: str, image_base64: str) -> float:
-    """发送单个推理请求，返回延迟（秒）。"""
+async def send_request(client: AsyncClient, model_name: str,
+                       request_id: int, image_base64: str) -> RequestResult:
+    """发送单个推理请求，返回完整结果（含推理输出）。"""
     start = time.monotonic()
     try:
         response = await client.post(
@@ -109,31 +163,62 @@ async def send_request(client: AsyncClient, model_name: str, image_base64: str) 
         )
         elapsed = time.monotonic() - start
         if response.status_code == 200:
-            return elapsed
+            body = response.json()
+            # 响应结构: {"model_name": ..., "outputs": [{"name": "output", "data": [classes, scores]}]}
+            outputs = body.get("outputs", [])
+            classes: list = []
+            scores: list = []
+            if outputs:
+                data = outputs[0].get("data", [])
+                if len(data) >= 2:
+                    classes = data[0]
+                    scores = data[1]
+                elif len(data) == 1:
+                    # 兼容只有 classes 的情况
+                    classes = data[0]
+            return RequestResult(
+                request_id=request_id,
+                latency=elapsed,
+                status_code=200,
+                classes=classes,
+                scores=scores,
+            )
         else:
-            print(f"  ❌ Request failed: {response.status_code} - {response.text}")
-            return -1
+            return RequestResult(
+                request_id=request_id,
+                latency=-1,
+                status_code=response.status_code,
+                error=f"HTTP {response.status_code}: {response.text[:200]}",
+            )
     except Exception as e:
-        print(f"  ❌ Request error: {e}")
-        return -1
+        elapsed = time.monotonic() - start
+        return RequestResult(
+            request_id=request_id,
+            latency=-1,
+            error=f"{type(e).__name__}: {e}",
+        )
 
 
 async def worker(client: AsyncClient, model_name: str, queue: asyncio.Queue,
                  result: BenchmarkResult, semaphore: asyncio.Semaphore):
-    """工作协程：从队列取请求并发送。"""
+    """工作协程：从队列取 (request_id, image_base64) 并发送。"""
     while True:
         try:
-            item = queue.get_nowait()
+            request_id, image_base64 = queue.get_nowait()
         except asyncio.QueueEmpty:
             break
 
         async with semaphore:
-            latency = await send_request(client, model_name, item)
-            if latency >= 0:
-                result.latencies.append(latency)
+            req_result = await send_request(
+                client, model_name, request_id, image_base64
+            )
+            result.request_results.append(req_result)
+            if req_result.success:
+                result.latencies.append(req_result.latency)
                 result.successful += 1
             else:
                 result.failed += 1
+                print(f"  ❌ req#{req_result.request_id} 失败: {req_result.error}")
 
 
 async def run_benchmark(base_url: str, model_name: str, concurrency: int,
@@ -149,10 +234,10 @@ async def run_benchmark(base_url: str, model_name: str, concurrency: int,
     print(f"🎲 生成 {total_requests} 张测试图像...")
     images = [generate_mnist_image() for _ in range(total_requests)]
 
-    # 填充请求队列
+    # 填充请求队列（带 request_id）
     queue = asyncio.Queue()
-    for img in images:
-        await queue.put(img)
+    for idx, img in enumerate(images):
+        await queue.put((idx, img))
 
     # 并发控制
     semaphore = asyncio.Semaphore(concurrency)
@@ -163,7 +248,12 @@ async def run_benchmark(base_url: str, model_name: str, concurrency: int,
     async with AsyncClient(base_url=base_url) as client:
         # 先预热一次
         print("🔥 预热...")
-        await send_request(client, model_name, images[0])
+        warmup_result = await send_request(client, model_name, -1, images[0])
+        if warmup_result.success:
+            print(f"   预热成功: latency={warmup_result.latency*1000:.2f}ms, "
+                  f"classes={warmup_result.classes[:3]}, scores={warmup_result.scores[:3]}")
+        else:
+            print(f"   预热失败: {warmup_result.error}")
         await asyncio.sleep(0.5)
 
         start_time = time.monotonic()
@@ -188,6 +278,8 @@ def main():
     parser.add_argument("--concurrency", "-c", type=int, default=10, help="并发数")
     parser.add_argument("--total", "-n", type=int, default=100, help="总请求数")
     parser.add_argument("--warmup", type=int, default=5, help="预热请求数")
+    parser.add_argument("--output", "-o", default="", help="结果保存路径（JSON），为空则不保存")
+    parser.add_argument("--sample", type=int, default=10, help="报告中展示的推理结果样本数")
     args = parser.parse_args()
 
     result = asyncio.run(run_benchmark(
@@ -197,7 +289,45 @@ def main():
         total_requests=args.total,
     ))
 
-    result.report()
+    result.report(sample_size=args.sample)
+
+    # 保存完整结果到 JSON
+    output_path = args.output
+    if not output_path:
+        output_path = f"benchmark_{args.model}_c{args.concurrency}_n{args.total}.json"
+
+    save_data = {
+        "config": {
+            "url": args.url,
+            "model": args.model,
+            "concurrency": args.concurrency,
+            "total_requests": args.total,
+        },
+        "summary": {
+            "successful": result.successful,
+            "failed": result.failed,
+            "total_time": round(result.total_time, 4),
+            "throughput": round(result.throughput, 2),
+            "avg_latency_ms": round(result.avg_latency * 1000, 2),
+            "p50_latency_ms": round(result.p50_latency * 1000, 2),
+            "p99_latency_ms": round(result.p99_latency * 1000, 2),
+        },
+        "requests": [
+            {
+                "id": r.request_id,
+                "success": r.success,
+                "status_code": r.status_code,
+                "latency_ms": round(r.latency * 1000, 3) if r.latency >= 0 else -1,
+                "classes": r.classes,
+                "scores": r.scores,
+                "error": r.error,
+            }
+            for r in sorted(result.request_results, key=lambda x: x.request_id)
+        ],
+    }
+
+    Path(output_path).write_text(json.dumps(save_data, ensure_ascii=False, indent=2))
+    print(f"\n💾 完整结果已保存: {output_path}")
 
 
 if __name__ == "__main__":

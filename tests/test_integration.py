@@ -51,7 +51,9 @@ class TestIntegration:
         """测试健康检查端点"""
         response = await http_client.get("/v2/health/ready")
         assert response.status_code == 200
-        assert response.json()["status"] == "ready"
+        data = response.json()
+        assert data["status"] is True
+        assert data["result"]["code"] == "200"
 
     @pytest.mark.asyncio
     async def test_list_models(self, http_client):
@@ -59,8 +61,9 @@ class TestIntegration:
         response = await http_client.get("/v2/models")
         assert response.status_code == 200
         data = response.json()
-        assert "models" in data
-        assert any(m["name"] == "resnet50" for m in data["models"])
+        assert data["status"] is True
+        models = data["result"]["data"]["message"]["data"]
+        assert any(m["name"] == "resnet50" for m in models)
 
     @pytest.mark.asyncio
     async def test_infer_with_base64_image(self, http_client):
@@ -87,5 +90,6 @@ class TestIntegration:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["model_name"] == "resnet50"
-        assert "outputs" in data
+        assert data["status"] is True
+        assert data["result"]["code"] == "200"
+        assert data["result"]["data"]["message"]["data"] is not None

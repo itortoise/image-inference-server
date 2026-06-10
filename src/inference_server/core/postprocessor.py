@@ -21,10 +21,11 @@ class Postprocessor:
 
 
 class ClassificationPostprocessor(Postprocessor):
-    """图像分类后处理：softmax + topk。"""
+    """图像分类后处理：softmax + topk + label 映射。"""
 
-    def __init__(self, top_k: int = 5):
+    def __init__(self, top_k: int = 5, label_map: dict = None):
         self.top_k = top_k
+        self.label_map = label_map or {}  # {id: key} 映射字典
 
     def process(self, output: np.ndarray) -> dict[str, Any]:
         """分类后处理。
@@ -33,7 +34,7 @@ class ClassificationPostprocessor(Postprocessor):
             output: logits，shape [1, num_classes]
 
         Returns:
-            {"classes": [...], "scores": [...]}
+            {"classes": [...], "scores": [...], "labels": [...]}
         """
         # 去除 batch 维度
         logits = output.reshape(-1)
@@ -46,7 +47,15 @@ class ClassificationPostprocessor(Postprocessor):
         topk_indices = np.argsort(probs)[::-1][:self.top_k]
         topk_scores = probs[topk_indices]
 
-        return {
+        result = {
             "classes": topk_indices.tolist(),
             "scores": topk_scores.tolist(),
         }
+
+        # label 映射：id -> key
+        if self.label_map:
+            result["labels"] = [self.label_map.get(idx, str(idx)) for idx in topk_indices.tolist()]
+        else:
+            result["labels"] = [str(idx) for idx in topk_indices.tolist()]
+
+        return result

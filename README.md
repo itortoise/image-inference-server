@@ -112,53 +112,155 @@
 
 ## 安装构建
 
-### 方式一：pip（传统方式）
+### 前置条件
+
+部分 Python 包依赖系统库和编译工具，安装前请确保系统环境满足要求：
+
+**Ubuntu/Debian：**
 
 ```bash
-# 1. 进入项目目录
+sudo apt-get update
+sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 build-essential
+```
+
+**macOS：**
+
+```bash
+# 安装 Xcode 命令行工具（包含 gcc）
+xcode-select --install
+```
+
+**缺少系统库的典型报错：**
+
+```
+ImportError: libGL.so.1: cannot open shared object file    # opencv 需要
+ImportError: libgthread-2.0.so.0: cannot open shared object  # opencv 需要
+error: Microsoft Visual C++ 14.0 is required               # grpcio 编译需要
+```
+
+### 方式一：pip
+
+#### 1. 配置国内镜像（国内环境必需）
+
+```bash
+# 创建 pip 配置文件
+mkdir -p ~/.config/pip
+cat > ~/.config/pip/pip.conf << 'EOF'
+[global]
+index-url = https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+trusted-host = mirrors.tuna.tsinghua.edu.cn
+EOF
+```
+
+其他国内镜像源：
+- 阿里云：`https://mirrors.aliyun.com/pypi/simple/`
+- 腾讯云：`https://mirrors.cloud.tencent.com/pypi/simple/`
+- 豆瓣：`https://pypi.doubanio.com/simple/`
+
+#### 2. 安装依赖
+
+```bash
 cd /path/to/inference-server
 
-# 2. 安装项目 + 开发依赖
+# 创建虚拟环境（推荐，避免污染系统 Python）
+python -m venv .venv
+source .venv/bin/activate
+
+# 安装项目 + 开发依赖
 pip install -e ".[dev]"
 ```
 
-> 默认安装 `onnxruntime`（CPU 版）。如需 GPU 加速，见 [GPU 支持](#gpu-支持) 章节。
-
-### 方式二：uv（推荐，项目已锁定依赖）
+#### 3. 启动服务
 
 ```bash
-# 1. 安装 uv（如果还没有）
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. 同步依赖并安装项目（开发模式）
-uv sync --dev
-
-# 之后所有 Python 命令通过 uv run 执行
-uv run python -m inference_server.main --config configs/service.yaml
+source .venv/bin/activate
+python -m inference_server.main --config configs/service.yaml
 ```
 
-> `uv.lock` 已锁定所有依赖版本，确保环境可复现。`uv sync` 会自动创建虚拟环境。
+### 方式二：uv（推荐，项目已锁定依赖版本）
+
+> ⚠️ **重要**：uv 默认从 PyPI (`pypi.org`) 下载包，**不会读取** pip 的镜像配置。国内环境必须先配置 uv 的镜像源。
+
+#### 1. 安装 uv
+
+```bash
+# 方式 A：官方脚本（从 GitHub 下载）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 方式 B：pip 安装（从 PyPI，不经过 GitHub）
+pip install uv
+```
+
+#### 2. 配置国内镜像
+
+```bash
+# 设置环境变量（当前终端生效）
+export UV_DEFAULT_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+
+# 或写入 shell 配置文件永久生效
+echo 'export UV_DEFAULT_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple' >> ~/.bashrc
+```
+
+#### 3. 安装依赖
+
+```bash
+cd /path/to/inference-server
+
+# 同步依赖（--dev 包含测试依赖，--frozen 使用 uv.lock 锁定版本）
+UV_DEFAULT_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+  uv sync --dev --frozen
+
+# 或直接用 uv 的 pip 兼容模式安装（会自动走 UV_DEFAULT_INDEX）
+uv venv --python python3
+uv pip install -e ".[dev]"
+```
+
+#### 4. 启动服务
+
+```bash
+# 使用 uv run（自动激活虚拟环境）
+uv run python -m inference_server.main --config configs/service.yaml
+
+# 或使用 CLI 入口
+uv run inference-server --config configs/service.yaml
+```
+
+### pip vs uv 的选择指南
+
+| 场景 | 推荐方式 | 原因 |
+|------|---------|------|
+| 有 pip 镜像配置，无 uv | `pip install -e ".[dev]"` | 直接用现有配置 |
+| 需要可复现的锁定依赖 | `uv sync --frozen` | `uv.lock` 精确锁定所有版本 |
+| 国内网络环境 | 两者都需要配置镜像 | uv 用 `UV_DEFAULT_INDEX`，pip 用 `pip.conf` |
+| Docker 构建 | `uv sync --frozen` | 更快，支持分层缓存 |
 
 ### GPU 支持
 
+#### 切换到 GPU 版本
+
 ```bash
-# 方式 A：手动切换（pip）
-pip uninstall onnxruntime
+# pip 方式
+pip uninstall onnxruntime -y
 pip install onnxruntime-gpu
 
-# 方式 B：手动切换（uv）
+# uv 方式
 uv pip uninstall onnxruntime
 uv pip install onnxruntime-gpu
+```
 
-# 验证 GPU 是否可用
+#### 验证 GPU 可用
+
+```bash
 python -c "import onnxruntime as ort; print(ort.get_available_providers())"
 # 期望输出包含 'CUDAExecutionProvider'
 ```
 
+#### Provider 对照
+
 | Provider | 说明 | 依赖 |
 |----------|------|------|
 | `CPUExecutionProvider` | CPU 推理，零额外依赖 | `onnxruntime` |
-| `CUDAExecutionProvider` | NVIDIA GPU 加速 | `onnxruntime-gpu` + CUDA/cuDNN |
+| `CUDAExecutionProvider` | NVIDIA GPU 加速 | `onnxruntime-gpu` + CUDA 12.x + cuDNN 9.x |
 | `TensorrtExecutionProvider` | TensorRT 极致加速 | `onnxruntime-gpu` + TensorRT |
 
 ---
@@ -177,15 +279,24 @@ ls models/
 
 ### 2. 启动服务
 
+**如果你用 pip 安装（在虚拟环境中）：**
+
 ```bash
-# 使用 pip 安装后
+source .venv/bin/activate
 python -m inference_server.main --config configs/service.yaml
 
-# 或使用 uv
+# 或使用 CLI 入口
+inference-server --config configs/service.yaml
+```
+
+**如果你用 uv 安装：**
+
+```bash
+# 在项目目录下执行（uv 会自动使用 .venv）
 uv run python -m inference_server.main --config configs/service.yaml
 
-# 或使用 CLI 入口（pip install -e 后可用）
-inference-server --config configs/service.yaml
+# 或使用 CLI 入口
+uv run inference-server --config configs/service.yaml
 ```
 
 服务启动后：
