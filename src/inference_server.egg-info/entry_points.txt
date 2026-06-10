@@ -1,2 +1,0 @@
-[console_scripts]
-inference-server = inference_server.main:main

@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 import yaml
 
-from inference_server.api.grpc_server import create_grpc_server
+# from inference_server.api.grpc_server import create_grpc_server
 from inference_server.api.http_server import create_http_app
 from inference_server.config import ServiceConfig
 from inference_server.core.scheduler import DynamicBatcher
@@ -47,9 +47,9 @@ async def serve(config: ServiceConfig):
     http_app = create_http_app(model_manager, scheduler)
 
     # 创建 gRPC 服务
-    grpc_server = create_grpc_server(
-        model_manager, scheduler, config.server.grpc_port
-    )
+    # grpc_server = create_grpc_server(
+    #     model_manager, scheduler, config.server.grpc_port
+    # )
 
     # 启动 gRPC
     await grpc_server.start()
@@ -74,7 +74,7 @@ async def serve(config: ServiceConfig):
     finally:
         scheduler.shutdown()
         scheduler_task.cancel()
-        await grpc_server.stop(5)
+        # await grpc_server.stop(5)
 
 
 def main():
