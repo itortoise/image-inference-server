@@ -23,6 +23,12 @@ class ONNXRuntimeBackend(Backend):
     - 不支持：退化为逐个推理（兼容性好，服务端不修改模型）
     """
 
+    def __init__(self):
+        # 可观测性计数器
+        self._total_infer_calls = 0
+        self._dynamic_batch_calls = 0
+        self._single_calls = 0
+
     def initialize(self, model_path: str, config: Dict) -> None:
         """加载 ONNX 模型。
 
@@ -53,6 +59,13 @@ class ONNXRuntimeBackend(Backend):
         # 检测是否支持动态 batch（batch 维度是否为 None/字符串）
         self._supports_dynamic_batch = self._detect_dynamic_batch()
 
+        # 可观测性：打印实际生效的 provider 和动态 batch 状态
+        actual_providers = self.session.get_providers()
+        print(f"  ├─ Active Provider:   {actual_providers}")
+        print(f"  ├─ Dynamic Batch:     {self._supports_dynamic_batch}")
+        print(f"  ├─ Input Specs:       {self._input_specs}")
+        print(f"  └─ Output Specs:      {self._output_specs}")
+
     def infer_single(self, inputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         """单张推理。inputs shape 为 [1, ...]。"""
         output_names = [o.name for o in self.session.get_outputs()]
@@ -65,9 +78,12 @@ class ONNXRuntimeBackend(Backend):
         如果模型支持动态 batch：合并为 [B, ...] 一次推理。
         如果不支持动态 batch：退化为基类默认实现（逐个推理）。
         """
+        self._total_infer_calls += 1
         if not self._supports_dynamic_batch or len(inputs_list) == 1:
             # 不支持动态 batch 或只有单张：逐个推理
+            self._single_calls += 1
             return super().infer_batch(inputs_list)
+        self._dynamic_batch_calls += 1
 
         # 支持动态 batch：合并推理
         input_name = self._input_specs[0]["name"]

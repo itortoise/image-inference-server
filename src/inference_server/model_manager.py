@@ -142,7 +142,13 @@ class ModelManager:
                 label_map=label_map,
             )
 
+            # 可观测性：打印模型加载摘要
             print(f"Model '{model_name}' loaded successfully")
+            print(f"  ├─ Version:           {latest_version.name}")
+            print(f"  ├─ Backend:           {model_config.backend}")
+            print(f"  ├─ Label Map:         {len(label_map)} entries")
+            print(f"  └─ Preprocess:        {model_config.preprocess.pixel_format}, "
+                  f"channels={preprocessor.num_channels}, resize={preprocessor.target_size}")
             return True
 
         except Exception as e:

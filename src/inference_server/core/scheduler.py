@@ -70,6 +70,11 @@ class DynamicBatcher:
             if not batch:
                 continue
 
+            # 记录 batch 收集耗时（首请求入队到收集完成）
+            batch_collect_done = time.monotonic()
+            first_enqueue = batch[0].enqueue_time
+            wait_time = batch_collect_done - first_enqueue
+
             # 并行预处理 → list[tensor]
             try:
                 images = [req.inputs.get("image") for req in batch]
@@ -93,6 +98,11 @@ class DynamicBatcher:
                     req.set_exception(e)
                 continue
             infer_latency = time.monotonic() - infer_start
+
+            # 可观测性：打印 batch 执行摘要
+            strategy = "dynamic" if len(inputs_list) > 1 and getattr(backend, "_supports_dynamic_batch", False) else "single"
+            print(f"[batch] size={len(batch)}/{self.max_batch_size}, strategy={strategy}, "
+                  f"wait={wait_time * 1000:.1f}ms, infer={infer_latency * 1000:.1f}ms")
 
             # 逐个后处理并分发结果
             for req, result_dict in zip(batch, results):
